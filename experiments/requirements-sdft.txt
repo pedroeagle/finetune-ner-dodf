@@ -1,0 +1,29 @@
+# Dependencies for the SDFT experiment — a SEPARATE venv from finetune-venv (which uses
+# trl 0.8). The DistilTrainer needs the newer TRL stack. Install in its own venv:
+#   python3.12 -m venv $WORK/sdft-venv && source $WORK/sdft-venv/bin/activate
+#   pip install torch --index-url https://download.pytorch.org/whl/rocm6.2   # ROCm (MI250)
+#   pip install -r experiments/requirements-sdft.txt
+#
+# Versions pinned in the official repository (upstream requirements.txt, commit d775732):
+transformers==4.57.1
+trl==0.24.0
+peft==0.17.1
+accelerate==1.11.0
+datasets==4.3.0
+deepspeed==0.18.4
+rich==14.2.0
+numpy==2.2.6
+scipy==1.15.3
+tqdm==4.67.1
+wandb==0.22.2          # optional (use --wandb); not needed with report_to="none"
+
+# torch: do NOT install it here — use the ROCm wheel (line above). Upstream pins
+# torch==2.9.0 (CUDA build); on ROCm use the equivalent rocm6.2 version available.
+
+# vLLM/flashinfer: OMITTED on purpose. We run with use_vllm=False (generation via
+# transformers), which is robust on ROCm. To try the literal path (on-policy with
+# vLLM), install vllm==0.12.0 + flashinfer-python==0.5.3 on the ROCm build and set
+# use_vllm=True in train_sdft.py. High compatibility risk on the MI250.
+
+# Evaluation (H1/H2) runs in the existing finetune-venv (evaluate_ner.py /
+# evaluate_forgetting.py detect the PEFT adapter). Not needed here.

@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Avalia o BERTimbau (encoder, classificação de tokens) no NER do DODF.
+"""Evaluate BERTimbau (encoder, token classification) on DODF NER.
 
-O encoder prediz em nível de documento (todos os tipos de entidade de uma vez).
-Para tornar a comparação com o decoder Qwen3-4B livre de viés, a predição é
-FATIADA exatamente nos mesmos registros (publicação, ato, entity_type) que o
-decoder avaliou — lendo o test.jsonl e mantendo, em cada registro, apenas os
-rótulos do entity_type consultado. O pool resultante reproduz, token a token, o
-mesmo gold e a mesma métrica seqeval do evaluate_ner.py.
+The encoder predicts at the document level (all entity types at once). To make the
+comparison with the Qwen3-4B decoder bias-free, the prediction is SLICED on exactly
+the same records (publication, act, entity_type) that the decoder evaluated — reading
+test.jsonl and keeping, in each record, only the labels of the queried entity_type.
+The resulting pool reproduces, token by token, the same gold and the same seqeval
+metric as evaluate_ner.py.
 
-Saída: JSON no mesmo schema do evaluate_ner.py, compatível com `--compare`.
+Output: JSON in the same schema as evaluate_ner.py, compatible with `--compare`.
 
-Uso:
+Usage:
   python experiments/evaluate_bertimbau.py --model results/checkpoints/bertimbau_base
   python experiments/evaluate_bertimbau.py --model results/checkpoints/bertimbau_large
 
-  # ΔF1 + bootstrap pareado contra o decoder (mesmo comando do evaluate_ner.py):
+  # ΔF1 + paired bootstrap against the decoder (same command as evaluate_ner.py):
   python experiments/evaluate_ner.py --compare \\
       results/ner_bertimbau_base_test.json results/ner_lora_r8_fmt_test.json
 """
@@ -49,10 +49,10 @@ RESULTS_DIR = ROOT / "results"
 
 def predict_docs(model, tokenizer, docs: list[dict], device, max_length: int,
                  batch_size: int, rank: int = 0) -> dict[tuple, list[str]]:
-    """Prediz rótulos por palavra para cada documento (publicação, ato).
+    """Predict per-word labels for each document (publication, act).
 
-    Cada palavra recebe o rótulo do seu 1º sub-token. Palavras além do limite de
-    max_length (truncadas) ficam como 'O' — caso raro (~60 tokens/doc em média).
+    Each word takes the label of its 1st sub-token. Words past the max_length limit
+    (truncated) stay as 'O' — a rare case (~60 tokens/doc on average).
     """
     model.eval()
     id2label = model.config.id2label
@@ -92,18 +92,18 @@ def predict_docs(model, tokenizer, docs: list[dict], device, max_length: int,
 
 
 def slice_to_entity(doc_labels: list[str], entity_type: str) -> list[str]:
-    """Mantém apenas os rótulos B-/I- do entity_type consultado; resto vira 'O'.
+    """Keep only the B-/I- labels of the queried entity_type; everything else → 'O'.
 
-    Reproduz a formulação por-entidade do decoder: fatiar a predição global por
-    tipo e juntar os fatias dá exatamente o mesmo conjunto de entidades que a
-    avaliação em nível de documento (cada span é contado uma vez no seu tipo)."""
+    Reproduces the decoder's per-entity formulation: slicing the global prediction by
+    type and joining the slices gives exactly the same set of entities as the
+    document-level evaluation (each span is counted once, under its type)."""
     keep = {f"B-{entity_type}", f"I-{entity_type}"}
     return [lab if lab in keep else "O" for lab in doc_labels]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True, help="Checkpoint do BERTimbau treinado")
+    parser.add_argument("--model", required=True, help="Trained BERTimbau checkpoint")
     parser.add_argument("--split", default="test", choices=["train", "dev", "test"])
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--max-length", type=int, default=512)
@@ -125,16 +125,16 @@ def main() -> None:
     out_path = args.output or str(RESULTS_DIR / f"ner_{tag}_{args.split}.json")
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    # Cada rank processa 1/world_size dos documentos
+    # Each rank processes 1/world_size of the documents
     docs_slice = docs[rank::world_size]
     if rank == 0:
-        print(f"Split '{args.split}': {len(docs):,} documentos "
+        print(f"Split '{args.split}': {len(docs):,} documents "
               f"({world_size} GPU(s)) | encoder token-classification")
-        print("Gerando predições por documento…")
+        print("Generating per-document predictions…")
     slice_preds = predict_docs(model, tokenizer, docs_slice, device,
                                args.max_length, args.batch_size, rank)
 
-    # Salva predições parciais por rank (chave tupla → lista [pub, act])
+    # Save partial per-rank predictions (tuple key → list [pub, act])
     tmp_path = out_path + f".rank{rank}"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump([[list(k), v] for k, v in slice_preds.items()], f, ensure_ascii=False)
@@ -146,7 +146,7 @@ def main() -> None:
     if rank != 0:
         return
 
-    # Rank 0 agrega as predições de todos os ranks
+    # Rank 0 aggregates predictions from all ranks
     doc_preds: dict[tuple, list[str]] = {}
     for r in range(world_size):
         tmp = out_path + f".rank{r}"
@@ -155,7 +155,7 @@ def main() -> None:
                 doc_preds[tuple(key)] = labels
         os.remove(tmp)
 
-    # Fatia a predição global nos MESMOS registros (pub, ato, entity_type) do decoder.
+    # Slice the global prediction on the SAME records (pub, act, entity_type) as the decoder.
     records: list[dict] = []
     with open(FT_DIR / f"{args.split}.jsonl", encoding="utf-8") as f:
         for line in f:
@@ -183,7 +183,7 @@ def main() -> None:
             }
         )
     if missing:
-        print(f"AVISO: {missing} registros sem documento conll correspondente (pred='O').")
+        print(f"WARNING: {missing} records with no matching conll document (pred='O').")
 
     metrics = overall_metrics(predictions)
     per_act = per_act_metrics(predictions)
@@ -194,9 +194,9 @@ def main() -> None:
     print(f"F1 (strict)  : {metrics['strict']['f1']:.4f}")
     print(f"Precision    : {metrics['precision']:.4f} (strict {metrics['strict']['precision']:.4f})")
     print(f"Recall       : {metrics['recall']:.4f} (strict {metrics['strict']['recall']:.4f})")
-    print(f"IC 95% (F1)  : [{boot['ci_lower']:.4f}, {boot['ci_upper']:.4f}]")
+    print(f"95% CI (F1)  : [{boot['ci_lower']:.4f}, {boot['ci_upper']:.4f}]")
 
-    print(f"\nPor ato:\n{'Ato':42s} {'F1':>7} {'F1str':>7} {'P':>7} {'R':>7} {'N':>6}")
+    print(f"\nPer act:\n{'Act':42s} {'F1':>7} {'F1str':>7} {'P':>7} {'R':>7} {'N':>6}")
     print("-" * 80)
     for act, m in per_act.items():
         print(f"{act:42s} {m['f1']:7.4f} {m['f1_strict']:7.4f} "
@@ -218,7 +218,7 @@ def main() -> None:
             indent=2,
             cls=_NumpyEncoder,
         )
-    print(f"\nResultados salvos em: {out_path}")
+    print(f"\nResults saved to: {out_path}")
 
 
 if __name__ == "__main__":

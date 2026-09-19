@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
-"""
-Prepara o corpus UnB-KnEDLe DODF para o experimento do paper:
+"""Prepare the UnB-KnEDLe DODF corpus for the paper's experiment:
 
-  1. Lê os 11 arquivos .conll (um por tipo de ato), no formato CoNLL/BIO.
-  2. Divide 70/15/15 NO NÍVEL DE DOCUMENTO, estratificado por tipo de ato.
-     - Estratificar por ato == dividir cada ato independentemente em 70/15/15,
-       o que garante a presença dos 11 atos nos 3 conjuntos (objetivo do paper).
-  3. Anti-vazamento: documentos com corpo idêntico (corpus templatizado) são
-     agrupados e atribuídos SEMPRE ao mesmo split — nunca straddle train/test.
-  4. Escreve o split em .conll (train/dev/test) preservando o formato original.
-  5. Gera a versão utilizável para fine-tuning de decoder (Qwen) no padrão GNER:
-     um prompt por tipo de entidade do ato, mesma sentença gera vários prompts.
-     A saída é token-tagging inline BIO ("word(B-tipo) word(I-tipo) word(O) ..."),
-     rotulando TODOS os tokens, mas apenas com o tipo consultado (demais -> O).
-     Instâncias negativas (tipo ausente) têm output com (O) em todos os tokens.
-     Estrutura de cada registro: {instruction, input, output, ...metadados}.
+  1. Read the 11 .conll files (one per act type), in CoNLL/BIO format.
+  2. Split 70/15/15 AT THE DOCUMENT LEVEL, stratified by act type.
+     - Stratifying by act == splitting each act independently into 70/15/15,
+       which guarantees all 11 acts appear in the 3 sets (the paper's goal).
+  3. Anti-leakage: documents with identical bodies (templated corpus) are
+     grouped and always assigned to the same split — never straddling train/test.
+  4. Write the split as .conll (train/dev/test) preserving the original format.
+  5. Generate the decoder-usable version for fine-tuning (Qwen) in the GNER style:
+     one prompt per entity type of the act, so the same sentence yields several
+     prompts. The output is inline BIO token-tagging ("word(B-type) word(I-type)
+     word(O) ..."), labeling ALL tokens but only with the queried type (others -> O).
+     Negative instances (type absent) have an output with (O) on every token.
+     Each record's structure: {instruction, input, output, ...metadata}.
 
-Determinístico (seed fixa). Sem dependências externas.
+Deterministic (fixed seed). No external dependencies.
 """
 
 import glob
@@ -50,7 +49,7 @@ def act_name_from_file(path):
 
 
 def parse_conll(path):
-    """Retorna lista de documentos. Cada doc = dict(pub, tokens, tags)."""
+    """Return a list of documents. Each doc = dict(pub, tokens, tags)."""
     docs = []
     pub = None
     tokens, tags = [], []
@@ -68,13 +67,13 @@ def parse_conll(path):
                 flush()
                 continue
             if line.startswith("Publication:"):
-                # novo documento começa aqui
+                # a new document starts here
                 flush()
                 pub = line.split(":", 1)[1].strip()
                 continue
             parts = line.split()
             if len(parts) < 2:
-                # token sem tag (raro) -> trata como 'O'
+                # token without a tag (rare) -> treat as 'O'
                 tok, tag = parts[0], "O"
             else:
                 tok, tag = parts[0], parts[-1]
@@ -85,9 +84,9 @@ def parse_conll(path):
 
 
 def doc_body_hash(doc):
-    # Anti-vazamento por SUPERFÍCIE (apenas tokens). Hashear tokens+tags faz
-    # docs com mesmo texto e anotação divergente caírem em splits diferentes,
-    # vazando a mesma sentença entre train/dev/test.
+    # Anti-leakage by SURFACE (tokens only). Hashing tokens+tags would make docs
+    # with the same text but divergent annotation fall into different splits,
+    # leaking the same sentence across train/dev/test.
     body = " ".join(doc["tokens"])
     return hashlib.md5(body.encode("utf-8")).hexdigest()
 
@@ -101,7 +100,7 @@ def entity_types_of(tags):
 
 
 def extract_spans(tokens, tags, etype):
-    """Spans (superfície) do tipo etype, via chunks BIO."""
+    """Spans (surface form) of type etype, via BIO chunks."""
     spans, cur = [], []
     for tok, tag in zip(tokens, tags):
         if tag == f"B-{etype}":
@@ -111,7 +110,7 @@ def extract_spans(tokens, tags, etype):
         elif tag == f"I-{etype}":
             if cur:
                 cur.append(tok)
-            else:  # I- sem B- precedente: inicia chunk mesmo assim
+            else:  # I- without a preceding B-: start a chunk anyway
                 cur = [tok]
         else:
             if cur:
@@ -123,8 +122,8 @@ def extract_spans(tokens, tags, etype):
 
 
 def stratified_split(docs):
-    """Divide os docs de UM ato em (train, dev, test) por documento,
-    mantendo duplicatas no mesmo split. Determinístico."""
+    """Split ONE act's docs into (train, dev, test) by document, keeping
+    duplicates in the same split. Deterministic."""
     groups = OrderedDict()  # hash -> [docs]
     for d in docs:
         groups.setdefault(doc_body_hash(d), []).append(d)
@@ -159,12 +158,13 @@ def write_conll(fh, docs, act):
 
 
 def format_instructions(etype):
-    """Descrição do formato de saída esperado (esquema BIO + sintaxe token(rótulo)).
+    """Description of the expected output format (BIO scheme + token(label) syntax).
 
-    Gravada no dataset (campo instruction_fmt) para que treino e avaliação usem
-    exatamente o mesmo prompt. Não mostra nenhum token real rotulado — só a *forma*
-    da saída (placeholders sintáticos token1/token2/…), descrevendo o formato sem
-    funcionar como exemplo rotulado.
+    Written into the dataset (field instruction_fmt) so training and evaluation use
+    exactly the same prompt. Shows no real labeled token — only the *shape* of the
+    output (syntactic placeholders token1/token2/…), describing the format without
+    acting as a labeled example. The returned text is Portuguese: it is part of the
+    dataset (the actual prompt), not translatable UI text.
     """
     return (
         "Reproduza o texto inteiro, token a token (separados por espaço), na "
@@ -179,8 +179,8 @@ def format_instructions(etype):
 
 
 def render_gner_output(tokens, tags, etype):
-    """Token-tagging inline BIO: 'word(B-tipo) word(I-tipo) word(O) ...'.
-    Rotula TODOS os tokens, mas só com o tipo consultado (demais -> O)."""
+    """Inline BIO token-tagging: 'word(B-type) word(I-type) word(O) ...'.
+    Labels ALL tokens, but only with the queried type (others -> O)."""
     out = []
     for tok, tag in zip(tokens, tags):
         if tag == f"B-{etype}":
@@ -194,8 +194,8 @@ def render_gner_output(tokens, tags, etype):
 
 
 def build_gner_records(doc, act, schema, split):
-    """Um registro por tipo de entidade do ato (instâncias negativas inclusas).
-    Formato GNER: instruction/input/output com token-tagging inline."""
+    """One record per entity type of the act (negative instances included).
+    GNER format: instruction/input/output with inline token-tagging."""
     text = " ".join(doc["tokens"])
     recs = []
     for etype in schema:
@@ -203,9 +203,9 @@ def build_gner_records(doc, act, schema, split):
         output = render_gner_output(doc["tokens"], doc["tags"], etype)
         instruction = f"Extraia todas as ocorrências da entidade {etype} do texto."
         recs.append({
-            # `instruction`     : enunciado puro (usado como demo no few-shot).
-            # `instruction_fmt` : enunciado + descrição do formato de saída (fmt).
-            #                     É o prompt canônico de treino/avaliação do decoder.
+            # `instruction`     : bare task statement (used as the few-shot demo).
+            # `instruction_fmt` : statement + output-format description (fmt).
+            #                     The canonical decoder train/eval prompt.
             "instruction": instruction,
             "instruction_fmt": f"{instruction}\n\n{format_instructions(etype)}",
             "input": text,
@@ -224,10 +224,10 @@ def main():
     os.makedirs(FT_OUT, exist_ok=True)
 
     files = sorted(glob.glob(os.path.join(CORPUS_DIR, "*.conll")))
-    assert files, f"Nenhum .conll em {CORPUS_DIR}"
+    assert files, f"No .conll files in {CORPUS_DIR}"
 
-    # 1) esquema de entidades por ato (sobre TODOS os docs do ato)
-    # 2) split por ato
+    # 1) entity schema per act (over ALL the act's docs)
+    # 2) split per act
     splits = {"train": [], "dev": [], "test": []}          # (act, doc)
     schema_by_act = {}
     stats = defaultdict(lambda: {"train": 0, "dev": 0, "test": 0, "total": 0})
@@ -249,14 +249,14 @@ def main():
     for name in splits:
         splits[name].sort(key=lambda x: (x[0], x[1]["pub"]))
 
-    # ---- escreve .conll ----
+    # ---- write .conll ----
     for name in ("train", "dev", "test"):
         out = os.path.join(CONLL_OUT, f"{name}.conll")
         with open(out, "w", encoding="utf-8") as fh:
             for act, d in splits[name]:
                 write_conll(fh, [d], act)
 
-    # ---- escreve JSONL GNER para fine-tuning ----
+    # ---- write GNER JSONL for fine-tuning ----
     ft_counts = {}
     for name in ("train", "dev", "test"):
         out = os.path.join(FT_OUT, f"{name}.jsonl")
@@ -269,7 +269,7 @@ def main():
                     n_neg += int(rec["is_negative"])
         ft_counts[name] = {"records": n_rec, "negatives": n_neg}
 
-    # ---- schema + estatísticas ----
+    # ---- schema + statistics ----
     with open(os.path.join(OUT_DIR, "entity_schema.json"), "w", encoding="utf-8") as fh:
         json.dump(schema_by_act, fh, ensure_ascii=False, indent=2)
 
@@ -288,8 +288,8 @@ def main():
     with open(os.path.join(OUT_DIR, "split_stats.json"), "w", encoding="utf-8") as fh:
         json.dump(summary, fh, ensure_ascii=False, indent=2)
 
-    # ---- relatório no terminal ----
-    print(f"{'Ato':32s} {'train':>6} {'dev':>5} {'test':>5} {'total':>6}")
+    # ---- terminal report ----
+    print(f"{'Act':32s} {'train':>6} {'dev':>5} {'test':>5} {'total':>6}")
     print("-" * 60)
     for act in sorted(stats):
         s = stats[act]
@@ -301,9 +301,9 @@ def main():
     for name in ("train", "dev", "test"):
         c = ft_counts[name]
         print(f"GNER {name:5s}: {c['records']:7d} prompts "
-              f"({c['negatives']} negativos, "
+              f"({c['negatives']} negatives, "
               f"{100*c['negatives']/c['records']:.1f}%)")
-    print(f"\nSaída: {OUT_DIR}")
+    print(f"\nOutput: {OUT_DIR}")
 
 
 if __name__ == "__main__":

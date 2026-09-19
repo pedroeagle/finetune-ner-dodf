@@ -1,5 +1,5 @@
-# PyTorch — instale a versão compatível com ROCm ou CUDA manualmente.
-# ROCm (cluster AMD): pip install torch --index-url https://download.pytorch.org/whl/rocm6.2
+# PyTorch — install the ROCm- or CUDA-compatible build manually.
+# ROCm (AMD cluster): pip install torch --index-url https://download.pytorch.org/whl/rocm6.2
 # CUDA:               pip install torch
 torch>=2.1.0
 
@@ -8,18 +8,18 @@ transformers>=4.45.0
 accelerate>=0.26.0
 datasets>=2.18.0
 
-# Fine-tuning eficiente
+# Efficient fine-tuning
 peft>=0.10.0         # LoRA / DoRA (use_dora=True)
 trl>=0.8.0           # SFTTrainer
-bitsandbytes>=0.43.0 # QLoRA / NF4 — suporte ROCm a partir de 0.43
+bitsandbytes>=0.43.0 # QLoRA / NF4 — ROCm support from 0.43
 
-# Avaliação NER (H1)
-seqeval>=1.2.2
+# NER evaluation (H1) — pinned: it defines the IOB2/strict parsing of the reported metrics
+seqeval==1.2.2
 
-# Avaliação de capacidades gerais (H2)
-lm-eval>=0.4.3       # lm-evaluation-harness (EleutherAI)
+# General-ability evaluation (H2) — pinned: the version changes the harness tasks/prompts
+lm-eval==0.4.9       # lm-evaluation-harness (EleutherAI)
 
-# Utilitários
+# Utilities
 numpy>=1.24.0
 scikit-learn>=1.3.0
 tqdm>=4.66.0

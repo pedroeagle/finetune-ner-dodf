@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""Avalia NER generativo: saída inline BIO → seqeval → métricas (H1).
+"""Evaluate generative NER: inline BIO output → seqeval → metrics (H1).
 
-Suporta inferência distribuída via torchrun: cada processo carrega o modelo
-completo em seu GPU e processa 1/N do dataset; rank 0 agrega e calcula métricas.
+Supports distributed inference via torchrun: each process loads the full model on
+its GPU and handles 1/N of the dataset; rank 0 aggregates and computes metrics.
 
-Uso:
-  # modelo fine-tuned (adaptador PEFT detectado automaticamente)
+Usage:
+  # fine-tuned model (PEFT adapter detected automatically)
   torchrun --nproc_per_node=8 experiments/evaluate_ner.py --model results/checkpoints/lora_r8
 
-  # baseline zero-shot
+  # zero-shot baseline
   torchrun --nproc_per_node=8 experiments/evaluate_ner.py --model Qwen/Qwen3-4B
 
-  # comparar dois resultados (ΔF1 + bootstrap) — roda localmente sem GPU
+  # compare two results (ΔF1 + bootstrap) — runs locally without a GPU
   python experiments/evaluate_ner.py \\
       --compare results/ner_lora_r8_fmt_test.json results/ner_Qwen3-4B_fmt_test.json
 
-O formato de saída esperado é gravado no dataset (campo instruction_fmt, ver
-scripts/build_dataset.py) e usado na query; os resultados saem com sufixo _fmt
-(ex.: ner_lora_r8_fmt_test.json).
+The expected output format is written into the dataset (field instruction_fmt, see
+scripts/build_dataset.py) and used in the query; results carry the _fmt suffix
+(e.g., ner_lora_r8_fmt_test.json).
 """
 from __future__ import annotations
 
@@ -69,11 +69,11 @@ CHATML_PAIR = (
 
 
 # ---------------------------------------------------------------------------
-# Setup distribuído
+# Distributed setup
 # ---------------------------------------------------------------------------
 
 def init_distributed() -> tuple[int, int, int]:
-    """Inicializa NCCL quando rodando via torchrun. Retorna (rank, world_size, local_rank)."""
+    """Initialize NCCL when running via torchrun. Returns (rank, world_size, local_rank)."""
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     rank = int(os.environ.get("RANK", 0))
@@ -89,17 +89,13 @@ def init_distributed() -> tuple[int, int, int]:
 
 
 # ---------------------------------------------------------------------------
-# Carregamento de modelo
+# Model loading
 # ---------------------------------------------------------------------------
 
 def load_model_and_tokenizer(model_path: str, device: torch.device,
                              dtype: torch.dtype = torch.bfloat16):
-    """Carrega base (+ adapter, se houver) garantindo dtype uniforme.
-
-    O dtype é aplicado de forma idêntica ao base e ao fine-tuned, para que a
-    comparação do H1 seja justa. Usa `torch_dtype=` (não `dtype=`, que versões
-    antigas do transformers ignoram silenciosamente, caindo em fp32).
-    """
+    """Load base (+ adapter, if any) with a uniform dtype across base and fine-tuned
+    (fair H1 comparison). Uses torch_dtype= (dtype= is ignored by older versions)."""
     adapter_cfg = Path(model_path) / "adapter_config.json"
 
     if adapter_cfg.exists():
@@ -108,7 +104,7 @@ def load_model_and_tokenizer(model_path: str, device: torch.device,
         with open(adapter_cfg, encoding="utf-8") as f:
             cfg = json.load(f)
         base = cfg["base_model_name_or_path"]
-        print(f"Adaptador PEFT detectado. Base: {base} | dtype={dtype}")
+        print(f"PEFT adapter detected. Base: {base} | dtype={dtype}")
 
         tokenizer = AutoTokenizer.from_pretrained(base, trust_remote_code=True)
         model = AutoModelForCausalLM.from_pretrained(
@@ -118,7 +114,7 @@ def load_model_and_tokenizer(model_path: str, device: torch.device,
             trust_remote_code=True,
         ).to(device)
         model = PeftModel.from_pretrained(model, model_path)
-        # Adapter pode vir salvo em fp32; uniformiza base+adapter no mesmo dtype.
+        # The adapter may be saved in fp32; unify base+adapter to the same dtype.
         model = model.to(dtype)
     else:
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -136,11 +132,11 @@ def load_model_and_tokenizer(model_path: str, device: torch.device,
 
 
 # ---------------------------------------------------------------------------
-# Parsing do formato GNER inline
+# Inline GNER format parsing
 # ---------------------------------------------------------------------------
 
 def parse_inline_bio(text: str) -> tuple[list[str], list[str]]:
-    """Converte 'tok1(B-etype) tok2(I-etype) tok3(O) …' em (tokens, labels)."""
+    """Convert 'tok1(B-etype) tok2(I-etype) tok3(O) …' into (tokens, labels)."""
     tokens, labels = [], []
     for unit in text.split():
         m = _UNIT_RE.match(unit)
@@ -157,16 +153,16 @@ def align_to_gold(pred_labels: list[str], gold_len: int) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Inferência
+# Inference
 # ---------------------------------------------------------------------------
 
 def load_few_shot_demos(n: int, seed: int = 42) -> dict[str, list[dict]]:
-    """Seleciona até n demos por (ato, entity_type) do split de treino.
+    """Select up to n demos per (act, entity_type) from the training split.
 
-    Retorna dict["act/entity_type" → list[record]]. Em inferência, cada exemplo
-    de teste recebe demos do seu próprio (ato, entity_type) — o modelo vê o
-    formato de saída e os labels exatos para aquela entidade naquele ato.
-    Vêm do treino (nunca do test) para evitar vazamento. Determinístico por seed.
+    Returns dict["act/entity_type" → list[record]]. At inference, each test example
+    gets demos from its own (act, entity_type) — the model sees the output format and
+    the exact labels for that entity in that act. They come from the training set
+    (never the test) to avoid leakage. Deterministic by seed.
     """
     recs = []
     with open(FT_DIR / "train.jsonl", encoding="utf-8") as f:
@@ -176,7 +172,7 @@ def load_few_shot_demos(n: int, seed: int = 42) -> dict[str, list[dict]]:
     by_key: dict[str, list[dict]] = defaultdict(list)
     for rec in recs:
         if rec.get("is_negative"):
-            continue  # demos negativos ensinam "não há entidade" — excluir
+            continue  # negative demos teach "there is no entity" — exclude
         key = f"{rec['act']}/{rec['entity_type']}"
         by_key[key].append(rec)
 
@@ -190,22 +186,10 @@ def load_few_shot_demos(n: int, seed: int = 42) -> dict[str, list[dict]]:
 
 
 def build_prompt(record: dict, tokenizer, demos: list[dict] | None = None) -> str:
-    """Prompt de inferência idêntico ao formato de treino (train.py:format_as_chat).
-
-    Usa o MESMO apply_chat_template com enable_thinking=False, só que com
-    add_generation_prompt=True. Isso garante que:
-      - a convenção do bloco <think>…</think> (se o template do Qwen3 a inserir)
-        seja idêntica entre treino e inferência;
-      - o modelo base não entre em thinking mode e esgote os max_new_tokens.
-
-    A query usa `instruction_fmt` (enunciado + descrição do formato de saída),
-    gravado no dataset por build_dataset.py.
-
-    Com `demos`, prepende pares user/assistant (few-shot) antes da query final,
-    mostrando ao modelo o formato de saída palavra(rótulo). As demonstrações usam
-    `instruction` puro (sem o bloco de formato): o formato já fica visível na
-    resposta de cada demo.
-    """
+    """Inference prompt identical to the training format (train.py:format_as_chat):
+    apply_chat_template with enable_thinking=False + add_generation_prompt=True. The query
+    uses instruction_fmt (statement + format). With `demos`, prepend few-shot user/assistant
+    pairs (with the bare instruction; the format already appears in each demo's answer)."""
     def _content(rec: dict, fmt: bool = False) -> str:
         instruction = rec["instruction_fmt"] if fmt else rec["instruction"]
         return f"{instruction}\n\n{rec['input']}"
@@ -240,18 +224,14 @@ def generate_predictions(
     model.eval()
     device = next(model.parameters()).device
     tokenizer.padding_side = "left"
-    # left-truncation preserva a query (fim do prompt) se exceder o limite.
+    # left-truncation preserves the query (end of the prompt) if it exceeds the limit.
     if demo_pool:
-        # Escala com o número de shots: +1024 por demo. +160 cobre o bloco de
-        # formato (~139 tokens fixos) que a query final sempre carrega.
+        # Scales with the number of shots (+1024 per demo; +160 covers the fixed format block).
         n_shot = max(len(v) for v in demo_pool.values())
         max_length = 1024 * (1 + n_shot) + 160
     else:
-        # Ramo zero-shot/FT. Teto 1536 (não 1024): no test o input é curto e
-        # padding=True enche só até o maior prompt do batch, então o teto não
-        # custa nada — H1 não é afetado. No dev cobre a cauda longa e reduz
-        # prompts truncados. Documentos além de 1536 tokens ainda truncam, mas
-        # o corte é simétrico entre os ranks, mantendo a seleção de rank válida.
+        # Zero-shot/FT: a cap of 1536 covers the dev long tail; padding only fills up to
+        # the largest prompt in the batch, so it costs nothing on test (short inputs).
         n_shot = 0
         max_length = 1536
     tokenizer.truncation_side = "left"
@@ -299,14 +279,14 @@ def generate_predictions(
                 raw_ids = out_ids[i][input_len:].tolist()
                 prompt_decoded = tokenizer.decode(out_ids[i][:input_len], skip_special_tokens=False)
                 generated_raw = tokenizer.decode(out_ids[i][input_len:], skip_special_tokens=False)
-                print(f"\n--- DEBUG exemplo {i} ---")
+                print(f"\n--- DEBUG example {i} ---")
                 print(f"  gold[:80]       : {rec['output'][:80]!r}")
                 print(f"  pred[:80]       : {generated[:80]!r}")
                 print(f"  pred_raw[:80]   : {generated_raw[:80]!r}")
                 print(f"  token_ids[:20]  : {raw_ids[:20]}")
                 print(f"  input_len       : {input_len}")
                 print(f"  prompt[-100:]   : {prompt_decoded[-100:]!r}")
-                print(f"  pred tokens gerados: {out_ids[i].shape[0] - input_len}")
+                print(f"  pred tokens generated: {out_ids[i].shape[0] - input_len}")
 
             _, gold_labels = parse_inline_bio(rec["output"])
             _, pred_labels = parse_inline_bio(generated)
@@ -320,6 +300,10 @@ def generate_predictions(
                     "is_negative": rec["is_negative"],
                     "gold": gold_labels,
                     "pred": pred_labels,
+                    # Raw generation (before the BIO parse): allows tolerant re-parsing
+                    # offline without re-running inference (e.g., separating a format
+                    # failure from a capability failure).
+                    "gen": generated,
                 }
             )
 
@@ -327,7 +311,7 @@ def generate_predictions(
 
 
 # ---------------------------------------------------------------------------
-# Métricas
+# Metrics
 # ---------------------------------------------------------------------------
 
 def _strict_scores(gold: list, pred: list) -> dict:
@@ -391,7 +375,7 @@ def per_entity_metrics(results: list[dict]) -> dict:
 
 
 def bootstrap_f1(results: list[dict], n_iter: int = 1000, seed: int = 42) -> dict:
-    # F1 strict IOB2 — mesma métrica canônica do ponto estimado e da comparação.
+    # Strict IOB2 F1 — the same canonical metric as the point estimate and the comparison.
     rng = random.Random(seed)
     n = len(results)
     f1s = []
@@ -409,7 +393,7 @@ def bootstrap_f1(results: list[dict], n_iter: int = 1000, seed: int = 42) -> dic
 
 
 # ---------------------------------------------------------------------------
-# Comparação de dois resultados (ΔF1 + bootstrap)
+# Compare two results (ΔF1 + bootstrap)
 # ---------------------------------------------------------------------------
 
 def _log(msg: str) -> None:
@@ -418,15 +402,15 @@ def _log(msg: str) -> None:
 
 
 def compare(path_a: str, path_b: str) -> None:
-    _log(f"Carregando {Path(path_a).name} …")
+    _log(f"Loading {Path(path_a).name} …")
     with open(path_a, encoding="utf-8") as f:
         da = json.load(f)
-    _log(f"Carregando {Path(path_b).name} …")
+    _log(f"Loading {Path(path_b).name} …")
     with open(path_b, encoding="utf-8") as f:
         db = json.load(f)
 
-    # Métrica canônica do H1 = F1 strict IOB2 (mesma do bootstrap, via _spans).
-    # Cai para o F1 default se o campo strict não estiver presente no JSON.
+    # Canonical H1 metric = strict IOB2 F1 (same as the bootstrap, via _spans).
+    # Falls back to the default F1 only if the JSON is old and lacks the strict field.
     def _f1_strict(d: dict) -> float:
         return d["metrics"].get("strict", {}).get("f1", d["metrics"]["f1"])
 
@@ -435,22 +419,22 @@ def compare(path_a: str, path_b: str) -> None:
     tag_a = da.get("model", Path(path_a).stem)
     tag_b = db.get("model", Path(path_b).stem)
 
-    print(f"\nModelo A: {tag_a}  →  F1 strict = {fa:.4f}")
-    print(f"Modelo B: {tag_b}  →  F1 strict = {fb:.4f}")
+    print(f"\nModel A: {tag_a}  →  strict F1 = {fa:.4f}")
+    print(f"Model B: {tag_b}  →  strict F1 = {fb:.4f}")
     print(f"ΔF1 (A − B) = {fa - fb:+.4f}")
 
     if "predictions" not in da or "predictions" not in db:
-        print("(predições individuais não disponíveis; bootstrap não executado)")
+        print("(individual predictions unavailable; bootstrap not run)")
         return
 
     preds_a = da["predictions"]
     preds_b = db["predictions"]
     if len(preds_a) != len(preds_b):
-        print("Aviso: conjuntos de tamanhos diferentes; bootstrap ignorado.")
+        print("Warning: sets of different sizes; bootstrap skipped.")
         return
 
-    # Pré-computa TP/FP/FN por amostra para evitar rodar seqeval 1000×.
-    # Bootstrap = sortear índices e somar inteiros → F1 em O(n_iter) em vez de O(n·n_iter).
+    # Pre-compute TP/FP/FN per sample to avoid running seqeval 1000×.
+    # Bootstrap = draw indices and sum integers → F1 in O(n_iter) instead of O(n·n_iter).
     def _spans(labels: list[str]) -> set[tuple]:
         spans, cur_type, cur_start = set(), None, None
         for i, lbl in enumerate(labels):
@@ -473,7 +457,7 @@ def compare(path_a: str, path_b: str) -> None:
         tp = len(g & p)
         return tp, len(p) - tp, len(g) - tp
 
-    _log(f"Pré-computando TP/FP/FN (n={len(preds_a)}) …")
+    _log(f"Pre-computing TP/FP/FN (n={len(preds_a)}) …")
     counts_a = np.array([_tpfpfn(r["gold"], r["pred"]) for r in preds_a], dtype=np.int32)
     counts_b = np.array([_tpfpfn(r["gold"], r["pred"]) for r in preds_b], dtype=np.int32)
 
@@ -481,7 +465,7 @@ def compare(path_a: str, path_b: str) -> None:
         denom = 2 * tp + fp + fn
         return 2 * tp / denom if denom > 0 else 0.0
 
-    _log(f"Bootstrap (1000 iterações) …")
+    _log(f"Bootstrap (1000 iterations) …")
     rng_np = np.random.default_rng(42)
     n = len(preds_a)
     deltas = []
@@ -495,15 +479,15 @@ def compare(path_a: str, path_b: str) -> None:
     deltas.sort()
     lo, hi = deltas[25], deltas[975]
 
-    print(f"IC 95% do ΔF1: [{lo:+.4f}, {hi:+.4f}]")
+    print(f"95% CI of ΔF1: [{lo:+.4f}, {hi:+.4f}]")
     if lo > 0:
-        print("→ H1 sustentada: IC inteiramente positivo.")
+        print("→ H1 supported: CI entirely positive.")
     else:
-        print("→ H1 não sustentada: IC inclui zero ou valores negativos.")
+        print("→ H1 not supported: CI includes zero or negative values.")
 
-    _log("Calculando métricas por ato …")
+    _log("Computing per-act metrics …")
     acts = sorted({r["act"] for r in preds_a})
-    print(f"\n{'Ato':42s} {'F1 A':>7} {'F1 B':>7} {'Δ':>7}")
+    print(f"\n{'Act':42s} {'F1 A':>7} {'F1 B':>7} {'Δ':>7}")
     print("-" * 65)
     by_act_a: dict = defaultdict(list)
     by_act_b: dict = defaultdict(list)
@@ -542,8 +526,8 @@ def compare(path_a: str, path_b: str) -> None:
             ensure_ascii=False,
             indent=2,
         )
-    _log(f"Resultado salvo em: {out_path}")
-    _log("Comparação concluída.")
+    _log(f"Result saved to: {out_path}")
+    _log("Comparison done.")
 
 
 # ---------------------------------------------------------------------------
@@ -553,17 +537,20 @@ def compare(path_a: str, path_b: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=None,
-                        help="Caminho do modelo ou adaptador PEFT")
+                        help="Model path or PEFT adapter")
     parser.add_argument("--split", default="test", choices=["train", "dev", "test"])
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--dtype", default="bf16", choices=["bf16", "fp32"],
-                        help="Precisão do modelo (bf16 padrão; fp32 p/ diagnóstico de NaN)")
+                        help="Model precision (bf16 default; fp32 for NaN diagnosis)")
     parser.add_argument("--few-shot", type=int, default=0,
-                        help="Nº de demonstrações few-shot do treino (0 = zero-shot)")
-    parser.add_argument("--output", default=None, help="Arquivo JSON de saída")
+                        help="Number of few-shot demonstrations from training (0 = zero-shot)")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="Evaluate only the first N examples of the split (quick probe; "
+                             "dev has ~18.7k). Deterministic: same N every time.")
+    parser.add_argument("--output", default=None, help="Output JSON file")
     parser.add_argument("--compare", nargs=2, metavar=("A", "B"),
-                        help="Compara dois JSONs de resultado (ΔF1 + bootstrap)")
+                        help="Compare two result JSONs (ΔF1 + bootstrap)")
     args = parser.parse_args()
 
     if args.compare:
@@ -571,7 +558,7 @@ def main() -> None:
         return
 
     if args.model is None:
-        parser.error("--model é obrigatório para avaliação")
+        parser.error("--model is required for evaluation")
 
     rank, world_size, local_rank = init_distributed()
     device = torch.device(f"cuda:{local_rank}")
@@ -584,20 +571,24 @@ def main() -> None:
         for line in f:
             records.append(json.loads(line))
 
+    if args.limit is not None:
+        records = records[: args.limit]
+
     demo_pool = load_few_shot_demos(args.few_shot) if args.few_shot > 0 else None
 
     if rank == 0:
         if demo_pool:
-            shot_desc = f"{args.few_shot}-shot adaptativo (por ato/entidade)"
+            shot_desc = f"{args.few_shot}-shot adaptive (per act/entity)"
         else:
             shot_desc = "zero-shot"
-        print(f"Split '{args.split}': {len(records):,} exemplos ({world_size} GPU(s)) | {shot_desc}")
-        print("Gerando predições…")
+        print(f"Split '{args.split}': {len(records):,} examples ({world_size} GPU(s)) | {shot_desc}")
+        print("Generating predictions…")
 
-    # Cada rank processa 1/world_size do dataset de forma intercalada
+    # Each rank handles 1/world_size of the dataset, interleaved
     records_slice = records[rank::world_size]
 
-    # Garante sufixo _fmt no nome do arquivo de saída, se ausente.
+    # The filename carries the _fmt suffix. Fine-tuning checkpoints already have it in
+    # the directory name; only append it when it is not present yet.
     model_tag = Path(args.model).name
     if args.few_shot > 0:
         model_tag += f"_fs{args.few_shot}"
@@ -611,17 +602,35 @@ def main() -> None:
         demo_pool,
     )
 
-    # Salva resultados parciais por rank
+    # Atomic write (write .partial and rename): rank 0 waits for the files via the
+    # filesystem, so the presence of the final file guarantees it is complete.
     tmp_path = out_path + f".rank{rank}"
-    with open(tmp_path, "w", encoding="utf-8") as f:
+    with open(tmp_path + ".partial", "w", encoding="utf-8") as f:
         json.dump(predictions, f, ensure_ascii=False)
+    os.replace(tmp_path + ".partial", tmp_path)
 
-    # Barreira: aguarda todos os ranks terminarem
+    # Synchronization WITHOUT a collective: ranks finish at very different times
+    # (generations with no EOS run to the cap), and a dist.barrier() would blow past
+    # the RCCL watchdog. Each rank already wrote its .rankN; rank 0 waits for them via
+    # the filesystem.
+    if rank != 0:
+        return
+
     if world_size > 1:
-        import torch.distributed as dist
-        dist.barrier()
+        import time
+        expected = [out_path + f".rank{r}" for r in range(world_size)]
+        deadline = time.time() + 6 * 3600
+        while time.time() < deadline:
+            if all(os.path.exists(p) and os.path.getsize(p) > 0 for p in expected):
+                break
+            time.sleep(15)
+        else:
+            missing = [p for p in expected
+                       if not (os.path.exists(p) and os.path.getsize(p) > 0)]
+            raise RuntimeError(f"Timeout waiting for ranks: {missing}")
+        time.sleep(3)  # margin for the flush of the just-closed writer
 
-    # Rank 0 agrega na ordem original e calcula métricas
+    # Rank 0 aggregates in the original order and computes metrics
     if rank == 0:
         rank_preds = []
         for r in range(world_size):
@@ -630,7 +639,7 @@ def main() -> None:
                 rank_preds.append(json.load(f))
             os.remove(tmp)
 
-        # Reconstrói ordem original: registro i foi para rank (i % world_size)
+        # Rebuild the original order: record i went to rank (i % world_size)
         all_predictions = []
         iters = [iter(rp) for rp in rank_preds]
         for i in range(len(records)):
@@ -647,9 +656,9 @@ def main() -> None:
               f"(strict {metrics['strict']['precision']:.4f})")
         print(f"Recall       : {metrics['recall']:.4f} "
               f"(strict {metrics['strict']['recall']:.4f})")
-        print(f"IC 95% (F1)  : [{boot['ci_lower']:.4f}, {boot['ci_upper']:.4f}]")
+        print(f"95% CI (F1)  : [{boot['ci_lower']:.4f}, {boot['ci_upper']:.4f}]")
 
-        print(f"\nPor ato:\n{'Ato':42s} {'F1':>7} {'F1str':>7} {'P':>7} {'R':>7} {'N':>6}")
+        print(f"\nPer act:\n{'Act':42s} {'F1':>7} {'F1str':>7} {'P':>7} {'R':>7} {'N':>6}")
         print("-" * 80)
         for act, m in per_act.items():
             print(
@@ -657,7 +666,7 @@ def main() -> None:
                 f"{m['precision']:7.4f} {m['recall']:7.4f} {m['n_records']:6d}"
             )
 
-        print(f"\nPor tipo de entidade:\n{'Ato/Entidade':42s} {'F1':>7} {'F1str':>7} "
+        print(f"\nPer entity type:\n{'Act/Entity':42s} {'F1':>7} {'F1str':>7} "
               f"{'P':>7} {'R':>7} {'N':>6}")
         print("-" * 80)
         for key, m in per_entity.items():
@@ -682,7 +691,7 @@ def main() -> None:
                 indent=2,
                 cls=_NumpyEncoder,
             )
-        print(f"\nResultados salvos em: {out_path}")
+        print(f"\nResults saved to: {out_path}")
 
 
 if __name__ == "__main__":

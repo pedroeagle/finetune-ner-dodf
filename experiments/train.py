@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Fine-tuning Qwen3-4B no corpus DODF/UnB-KnEDLe com LoRA ou DoRA.
+"""Fine-tune Qwen3-4B on the DODF/UnB-KnEDLe corpus with LoRA or DoRA.
 
-Usa TRL SFTTrainer + PEFT LoraConfig. QLoRA (NF4) ativado com --use-qlora.
-O adaptador é salvo no formato PEFT (adapter_config.json + adapter_model.safetensors).
+Uses TRL SFTTrainer + PEFT LoraConfig. QLoRA (NF4) is enabled with --use-qlora.
+The adapter is saved in PEFT format (adapter_config.json + adapter_model.safetensors).
 
-Uso:
+Usage:
   python experiments/train.py --adapter lora --rank 8
   python experiments/train.py --adapter dora --rank 8
   python experiments/train.py --adapter lora --rank 8 --use-qlora
-  python experiments/train.py --adapter lora --rank 4   # varredura de rank (paper: r in {4,8,16})
+  python experiments/train.py --adapter lora --rank 4   # rank sweep (paper: r in {4,8,16})
 """
 import argparse
 import json
@@ -37,10 +37,8 @@ def load_jsonl(path: Path) -> list[dict]:
 
 
 def format_as_chat(record: dict, tokenizer) -> str:
-    # `instruction_fmt` = enunciado + descrição do formato de saída, gravado no
-    # dataset por build_dataset.py — o mesmo prompt usado na avaliação. Índice
-    # direto (não .get): falha alto se o campo estiver ausente, evitando
-    # treinar silenciosamente com prompt incorreto.
+    # instruction_fmt = task statement + output-format description (build_dataset.py);
+    # the same prompt used at evaluation time.
     instruction = record["instruction_fmt"]
     messages = [
         {"role": "user", "content": f"{instruction}\n\n{record['input']}"},
@@ -66,36 +64,48 @@ def build_hf_dataset(records: list[dict], tokenizer) -> Dataset:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="Qwen/Qwen3-4B",
-                        help="Modelo base (HuggingFace hub ou caminho local)")
+                        help="Base model (HuggingFace hub id or local path)")
     parser.add_argument("--adapter", choices=["lora", "dora"], default="lora",
-                        help="Técnica de adaptação: LoRA ou DoRA (seção 4.4 do paper)")
+                        help="Adaptation technique: LoRA or DoRA (paper section 4.4)")
     parser.add_argument("--rank", type=int, default=8, choices=[4, 8, 16],
-                        help="Posto r — paper faz varredura em {4, 8, 16}")
+                        help="Rank r — the paper sweeps {4, 8, 16}")
     parser.add_argument("--use-qlora", action="store_true",
-                        help="Quantizar modelo base em NF4 para reduzir VRAM (QLoRA)")
+                        help="Quantize the base model to NF4 to reduce VRAM (QLoRA)")
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=4,
-                        help="Batch por GPU; batch efetivo = batch-size × grad-accum")
+                        help="Per-GPU batch size")
     parser.add_argument("--grad-accum", type=int, default=4,
-                        help="Acúmulo de gradiente (batch efetivo padrão = 4×4 = 16)")
+                        help="Gradient accumulation. Effective batch = batch-size × grad-accum × "
+                             "world_size (number of GPUs); the reported runs used 8 GPUs → 4×4×8 = 128")
     parser.add_argument("--lr", type=float, default=2e-4,
-                        help="Taxa de aprendizado (paper: 2e-4, agendador linear)")
+                        help="Learning rate (paper: 2e-4, linear scheduler)")
     parser.add_argument("--max-length", type=int, default=2048,
-                        help="Comprimento máximo do contexto em tokens (input+output BIO)")
+                        help="Maximum context length in tokens (input + BIO output)")
     parser.add_argument("--output-dir", default=None,
-                        help="Diretório de saída do adaptador (padrão: results/checkpoints/…)")
+                        help="Adapter output directory (default: results/checkpoints/…)")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Training seed (data shuffle + init). Default 42 = original "
+                             "run. Use other seeds to estimate variance (H2).")
+    parser.add_argument("--train-frac", type=float, default=1.0,
+                        help="Fraction of the training set (0<f≤1) for the data curve. Default "
+                             "1.0 = all 87k. Deterministic subsampling by --seed.")
     args = parser.parse_args()
 
-    # α/r = 2, conforme paper (seção 4.4) e recomendação do artigo original do LoRA
-    alpha = args.rank * 2
+    if not (0.0 < args.train_frac <= 1.0):
+        parser.error("--train-frac must be in (0, 1]")
 
+    alpha = args.rank * 2  # α/r = 2 (paper section 4.4; original LoRA convention)
+
+    # Suffixes only when off-default, to avoid colliding with the canonical run (seed 42, frac 1.0).
+    seed_suffix = "" if args.seed == 42 else f"_s{args.seed}"
+    frac_suffix = "" if args.train_frac >= 1.0 else f"_f{int(round(args.train_frac * 100))}"
     qlora_suffix = "_qlora" if args.use_qlora else ""
     out_dir = args.output_dir or str(
-        RESULTS_DIR / f"checkpoints/{args.adapter}_r{args.rank}_fmt{qlora_suffix}"
+        RESULTS_DIR / f"checkpoints/{args.adapter}_r{args.rank}_fmt{qlora_suffix}{frac_suffix}{seed_suffix}"
     )
     os.makedirs(out_dir, exist_ok=True)
 
-    # ---- quantização NF4 (QLoRA) ----
+    # ---- NF4 quantization (QLoRA) ----
     bnb_config = None
     if args.use_qlora:
         from transformers import BitsAndBytesConfig
@@ -106,13 +116,13 @@ def main() -> None:
             bnb_4bit_compute_dtype=torch.bfloat16,
         )
 
-    # ---- tokenizador ----
+    # ---- tokenizer ----
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.model_max_length = args.max_length
 
-    # ---- modelo base ----
+    # ---- base model ----
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     torch.cuda.set_device(local_rank)
     model_kwargs: dict = {
@@ -122,15 +132,14 @@ def main() -> None:
     if args.use_qlora:
         model_kwargs["quantization_config"] = bnb_config
     else:
-        # bf16 (não fp16): fp16 no ROCm MI250 gera NaN silencioso nos pesos do
-        # adapter. Deve casar com bf16=True no SFTConfig e com o dtype do eval.
+        # bf16, not fp16: fp16 on ROCm MI250 silently produces NaN in the adapter weights.
         model_kwargs["torch_dtype"] = torch.bfloat16
 
     model = AutoModelForCausalLM.from_pretrained(args.model, **model_kwargs)
-    model.config.use_cache = False  # obrigatório com gradient checkpointing
+    model.config.use_cache = False  # required with gradient checkpointing
 
     # ---- LoRA / DoRA ----
-    # target_modules=["q_proj","v_proj"] segue artigo original do LoRA (Hu et al. 2022)
+    # target_modules=["q_proj","v_proj"] follows the original LoRA paper (Hu et al. 2022)
     lora_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
         r=args.rank,
@@ -145,22 +154,29 @@ def main() -> None:
     train_records = load_jsonl(FT_DIR / "train.jsonl")
     dev_records = load_jsonl(FT_DIR / "dev.jsonl")
 
+    # Data curve: deterministically subsample a fraction of the training set (RNG by --seed).
+    if args.train_frac < 1.0:
+        import random as _random
+        n_keep = max(1, int(round(len(train_records) * args.train_frac)))
+        _rng = _random.Random(args.seed)
+        idx = _rng.sample(range(len(train_records)), n_keep)
+        train_records = [train_records[i] for i in idx]
+        print(f"Data curve: frac={args.train_frac} → {n_keep:,} training examples")
+
     train_ds = build_hf_dataset(train_records, tokenizer)
     dev_ds = build_hf_dataset(dev_records, tokenizer)
 
-    print(f"Adaptador : {args.adapter.upper()} | r={args.rank} | α={alpha}")
-    print(f"QLoRA     : {'sim (NF4)' if args.use_qlora else 'não'}")
-    print(f"Treino    : {len(train_ds):,} exemplos")
-    print(f"Validação : {len(dev_ds):,} exemplos")
-    print(f"Saída     : {out_dir}")
+    print(f"Adapter    : {args.adapter.upper()} | r={args.rank} | α={alpha}")
+    print(f"QLoRA      : {'yes (NF4)' if args.use_qlora else 'no'}")
+    print(f"Train      : {len(train_ds):,} examples")
+    print(f"Validation : {len(dev_ds):,} examples")
+    print(f"Output     : {out_dir}")
 
     # ---- SFTTrainer ----
     sft_config = SFTConfig(
         output_dir=out_dir,
-        # Trunca a sequência (input+output BIO) no valor pedido. Sem isto o
-        # SFTConfig usa o default 1024, ignorando --max-length e cortando ~4%
-        # dos exemplos (perde o fim do turno do assistente). model_max_length
-        # do tokenizer só controla o aviso, não o truncamento efetivo.
+        # Truncate input + BIO output. Without this, SFTConfig uses its default of 1024
+        # and cuts ~4% of the examples (the tokenizer's model_max_length only controls the warning).
         max_length=args.max_length,
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
@@ -180,7 +196,8 @@ def main() -> None:
         metric_for_best_model="eval_loss",
         report_to="none",
         dataset_text_field="text",
-        seed=42,
+        seed=args.seed,
+        data_seed=args.seed,
     )
 
     data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
@@ -199,11 +216,10 @@ def main() -> None:
     resume = str(checkpoints[-1]) if checkpoints else None
     trainer.train(resume_from_checkpoint=resume)
 
-    # Salva adaptador PEFT (adapter_config.json + pesos); base_model_name_or_path
-    # fica registrado no adapter_config.json para carregamento automático depois.
+    # Save the PEFT adapter (adapter_config.json records the base model for later loading).
     trainer.save_model(out_dir)
     tokenizer.save_pretrained(out_dir)
-    print(f"\nAdaptador salvo em: {out_dir}")
+    print(f"\nAdapter saved to: {out_dir}")
 
 
 if __name__ == "__main__":

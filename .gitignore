@@ -28,3 +28,7 @@ env/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Vendored SDFT trainer — fetched locally, never committed (see upstream/ATTRIBUTION.md)
+experiments/sdft/upstream/distil_trainer.py
+experiments/sdft/upstream/distil_config.py

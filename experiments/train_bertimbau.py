@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Fine-tuning do BERTimbau (encoder) para NER no corpus DODF/UnB-KnEDLe.
+"""Fine-tune BERTimbau (encoder) for NER on the DODF/UnB-KnEDLe corpus.
 
-Baseline de estado-da-arte (classificação de tokens) para contrastar com o NER
-generativo do Qwen3-4B. Usa AutoModelForTokenClassification + Trainer sobre os
-MESMOS splits CoNLL (mesmos documentos por partição que o decoder), de modo que
-a comparação meça a distância até a SOTA de encoder sem viés de dados.
+State-of-the-art baseline (token classification) to contrast with the generative
+NER of Qwen3-4B. Uses AutoModelForTokenClassification + Trainer over the SAME CoNLL
+splits (same documents per partition as the decoder), so the comparison measures the
+distance to the encoder SOTA without data bias.
 
-Formulação "natural" do encoder: um único modelo global, head sobre todos os
-rótulos BIO do corpus, uma passada por documento (todos os tipos de entidade de
-uma vez). Os sub-tokens não-iniciais e os tokens especiais recebem -100 (padrão
-HuggingFace de alinhamento de rótulos para WordPiece).
+The encoder's "natural" formulation: a single global model, a head over all the BIO
+labels of the corpus, one pass per document (all entity types at once). Non-initial
+sub-tokens and special tokens get -100 (the HuggingFace convention for aligning labels
+to WordPiece).
 
-Uso:
+Usage:
   python experiments/train_bertimbau.py --model neuralmind/bert-base-portuguese-cased
   python experiments/train_bertimbau.py --model neuralmind/bert-large-portuguese-cased
 """
@@ -34,15 +34,15 @@ from transformers import (
 
 
 def _ensure_safetensors(hub_model_id: str) -> str:
-    """Converte pytorch_model.bin → safetensors num dir local, com cache.
+    """Convert pytorch_model.bin → safetensors in a local dir, with caching.
 
-    Workaround para CVE-2025-32434: transformers >= 4.52 bloqueia torch.load
-    em torch < 2.6, mas neuralmind/bert-* só distribui pytorch_model.bin.
-    Solução: baixamos o .bin via torch.load direto (não passa pelo bloqueio do
-    transformers) e re-salvamos como safetensors antes do from_pretrained.
+    Workaround for CVE-2025-32434: transformers >= 4.52 blocks torch.load on
+    torch < 2.6, but neuralmind/bert-* only ships pytorch_model.bin. Solution: we
+    download the .bin via torch.load directly (bypassing the transformers guard)
+    and re-save it as safetensors before from_pretrained.
 
-    Deve ser chamado apenas pelo rank 0; os outros ranks esperam pelo sentinel
-    antes de continuar (ver lógica em main()).
+    Should be called only by rank 0; other ranks wait for the sentinel before
+    continuing (see the logic in main()).
     """
     from huggingface_hub import hf_hub_download, snapshot_download
     from safetensors.torch import save_file
@@ -52,23 +52,23 @@ def _ensure_safetensors(hub_model_id: str) -> str:
     local = Path(hf_home) / "bertimbau_safetensors" / slug
     local.mkdir(parents=True, exist_ok=True)
 
-    print(f"[safetensors] Convertendo {hub_model_id} → {local}")
+    print(f"[safetensors] Converting {hub_model_id} → {local}")
 
-    # Baixa config, tokenizer, vocab — ignora .bin e formatos alternativos
+    # Download config, tokenizer, vocab — skip .bin and alternative formats
     snapshot_download(
         hub_model_id,
         local_dir=str(local),
         ignore_patterns=["pytorch_model.bin", "*.msgpack", "flax_model.msgpack"],
     )
 
-    # Baixa o .bin no cache HF padrão e carrega via torch.load direto
-    # (não passa por check_torch_load_is_safe do transformers — não bloqueado)
+    # Download the .bin into the default HF cache and load via torch.load directly
+    # (does not go through transformers' check_torch_load_is_safe — not blocked)
     bin_path = hf_hub_download(hub_model_id, "pytorch_model.bin")
     state_dict = torch.load(bin_path, map_location="cpu")
 
-    # BERT amarra word_embeddings ↔ cls.predictions.decoder (mesmo storage).
-    # safetensors.save_file recusa tensores com storage compartilhado; clonar os
-    # aliases é seguro porque from_pretrained re-amarra via tie_weights() ao carregar.
+    # BERT ties word_embeddings ↔ cls.predictions.decoder (same storage).
+    # safetensors.save_file refuses tensors with shared storage; cloning the aliases
+    # is safe because from_pretrained re-ties them via tie_weights() on load.
     seen: dict[int, str] = {}
     for key in list(state_dict.keys()):
         ptr = state_dict[key].untyped_storage().data_ptr()
@@ -79,7 +79,7 @@ def _ensure_safetensors(hub_model_id: str) -> str:
 
     save_file(state_dict, str(local / "model.safetensors"))
 
-    print(f"[safetensors] Salvo: {local / 'model.safetensors'}")
+    print(f"[safetensors] Saved: {local / 'model.safetensors'}")
     return str(local)
 
 
@@ -89,10 +89,10 @@ RESULTS_DIR = ROOT / "results"
 
 
 def read_conll(path: Path) -> list[dict]:
-    """Lê CoNLL (Publication:/Act:/token label/linha em branco) em documentos.
+    """Read CoNLL (Publication:/Act:/token label/blank line) into documents.
 
-    Cada documento vira {'publication','act','tokens','labels'}. A unidade de
-    documento é o par (publicação, ato), idêntica à do split do decoder.
+    Each document becomes {'publication','act','tokens','labels'}. The document unit
+    is the (publication, act) pair, identical to the decoder's split.
     """
     docs: list[dict] = []
     pub = act = None
@@ -124,7 +124,7 @@ def read_conll(path: Path) -> list[dict]:
 
 
 def build_label_list(docs: list[dict]) -> list[str]:
-    """Conjunto global de rótulos BIO a partir do treino. 'O' recebe índice 0."""
+    """Global set of BIO labels from the training set. 'O' gets index 0."""
     labels = set()
     for d in docs:
         labels.update(d["labels"])
@@ -133,8 +133,8 @@ def build_label_list(docs: list[dict]) -> list[str]:
 
 
 def tokenize_and_align(docs: list[dict], tokenizer, label2id: dict, max_length: int) -> Dataset:
-    """Tokeniza por palavra (WordPiece) e alinha rótulos: 1º sub-token recebe o
-    rótulo da palavra; sub-tokens seguintes e tokens especiais recebem -100."""
+    """Tokenize per word (WordPiece) and align labels: the 1st sub-token gets the
+    word's label; following sub-tokens and special tokens get -100."""
     all_tokens = [d["tokens"] for d in docs]
     all_labels = [d["labels"] for d in docs]
 
@@ -165,26 +165,26 @@ def tokenize_and_align(docs: list[dict], tokenizer, label2id: dict, max_length: 
 
 
 def main() -> None:
-    # CVE-2025-32434: o transformers bloqueia torch.load em torch < 2.6 em dois
-    # pontos: carregamento do modelo (from_pretrained) e do otimizador/scheduler
-    # (resume_from_checkpoint). Patch global aqui cobre ambos. Seguro neste
-    # ambiente controlado — todos os arquivos carregados são do HF Hub ou foram
-    # gerados pelo próprio Trainer neste projeto.
+    # CVE-2025-32434: transformers blocks torch.load on torch < 2.6 in two places:
+    # model loading (from_pretrained) and optimizer/scheduler loading
+    # (resume_from_checkpoint). A global patch here covers both. Safe in this
+    # controlled environment — every file loaded is from the HF Hub or was produced
+    # by the Trainer in this project.
     import transformers.utils.import_utils as _tu
     _tu.check_torch_load_is_safe = lambda: None
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="neuralmind/bert-base-portuguese-cased",
-                        help="Encoder base (BERTimbau base ou large)")
+                        help="Base encoder (BERTimbau base or large)")
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=2e-5,
-                        help="Taxa de aprendizado (prática comum p/ fine-tuning de BERT NER)")
+                        help="Learning rate (common practice for BERT NER fine-tuning)")
     parser.add_argument("--max-length", type=int, default=512,
-                        help="Limite de sub-tokens do BERT; atos têm ~60 tokens (sem truncamento)")
+                        help="BERT sub-token limit; acts have ~60 tokens (no truncation)")
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--grad-accum", type=int, default=1,
-                        help="Passos de acumulação de gradiente (para manter batch efetivo sem DDP)")
+                        help="Gradient accumulation steps (to keep effective batch without DDP)")
     parser.add_argument("--output-dir", default=None)
     args = parser.parse_args()
 
@@ -193,7 +193,7 @@ def main() -> None:
     os.makedirs(out_dir, exist_ok=True)
 
     # --- Workaround CVE-2025-32434 (torch < 2.6 + neuralmind .bin) -----------
-    # Rank 0 converte .bin → safetensors; outros ranks esperam pelo sentinel.
+    # Rank 0 converts .bin → safetensors; other ranks wait for the sentinel.
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     if not Path(args.model).is_dir():
         hf_home = os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
@@ -232,11 +232,11 @@ def main() -> None:
         label2id=label2id,
     )
 
-    print(f"Modelo    : {args.model} ({tag})")
-    print(f"Rótulos   : {len(label_list)}")
-    print(f"Treino    : {len(train_ds):,} documentos")
-    print(f"Validação : {len(dev_ds):,} documentos")
-    print(f"Saída     : {out_dir}")
+    print(f"Model      : {args.model} ({tag})")
+    print(f"Labels     : {len(label_list)}")
+    print(f"Train      : {len(train_ds):,} documents")
+    print(f"Validation : {len(dev_ds):,} documents")
+    print(f"Output     : {out_dir}")
 
     def compute_metrics(eval_pred) -> dict:
         logits, labels = eval_pred
@@ -296,7 +296,7 @@ def main() -> None:
 
     trainer.save_model(out_dir)
     tokenizer.save_pretrained(out_dir)
-    print(f"\nModelo salvo em: {out_dir}")
+    print(f"\nModel saved to: {out_dir}")
 
 
 if __name__ == "__main__":

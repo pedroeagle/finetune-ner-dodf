@@ -4,13 +4,15 @@
 # Setup script for AMD HPC cluster environment
 # Run this once after SSH'ing into the cluster
 #
-# Usage:
+# Usage (from the repo root):
 #   ssh USER@hpcfund.amd.com
 #   cd ~/finetune
-#   ./setup_cluster.sh
+#   ./scripts/setup_cluster.sh
 #
-# The venv is created under $WORK (not $HOME) because PyTorch ROCm
-# requires ~8 GB and $HOME has only a 24 GB quota.
+# Creates the finetune-venv (evaluation + SFT) under $WORK (not $HOME): PyTorch
+# ROCm needs ~8 GB and $HOME has only a 24 GB quota. The SDFT venv (trl 0.24) is
+# separate — see experiments/requirements-sdft.txt for how to create it. The
+# bench-scripted step needs a third venv (datasets<3.0); see that step in submit.sh.
 ##########################################################################
 
 set -e
@@ -20,7 +22,8 @@ echo "AMD HPC Cluster - Environment Setup"
 echo "=========================================="
 echo ""
 
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Repo root = parent of this script's directory (scripts/).
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
 # Venv lives under $WORK to avoid filling $HOME (24 GB quota)

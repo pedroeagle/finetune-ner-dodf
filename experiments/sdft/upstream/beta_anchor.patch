@@ -1,0 +1,35 @@
+--- a/distil_trainer.py	2026-09-07 12:08:04.075479570 -0500
++++ b/distil_trainer.py	2026-09-07 12:08:16.434102173 -0500
+@@ -1459,9 +1459,15 @@
+             else:
+                 importance_sampling_ratio = None
+ 
+-            # Compute the per-token log probabilities for the reference model
++            # Compute the per-token log probabilities for the reference model.
++            # anchor_to_base (set externally): force the beta anchor to use the FROZEN
++            # BASE (student with adapter disabled), NOT self.ref_model. This matters when
++            # the EMA teacher is on (sync_ref_model=True): there self.ref_model IS the
++            # moving-average teacher, which collapses along with the student, so anchoring
++            # to it has ~zero corrective pressure. Forcing disable_adapter() gives the true
++            # base, so KL(student||base) actually regularizes. Default False = upstream.
+             if self.beta != 0.0:
+-                if self.ref_model is not None:
++                if self.ref_model is not None and not getattr(self, "anchor_to_base", False):
+                     ref_per_token_logps, _, _ = self._get_per_token_logps_and_entropies(
+                         self.ref_model,
+                         prompt_completion_ids,
+@@ -1675,6 +1681,14 @@
+             kl_loss = alpha * kl_teacher + (1 - alpha) * kl_student
+         per_token_loss = kl_loss.sum(-1)
+ 
++        # Add the beta KL anchor to the objective. In the upstream vendored code
++        # per_token_kl was computed only for logging (kl_to_base_model) and NEVER added
++        # to the loss, so beta>0 was a no-op on training. Here it actually regularizes the
++        # student toward the reference (the frozen base when anchor_to_base is set),
++        # testing whether the anchor stabilizes the EMA teacher over the long horizon.
++        if self.beta != 0.0:
++            per_token_loss = per_token_loss + self.beta * per_token_kl
++
+         if self.use_vllm and self.vllm_importance_sampling_correction and not self.generate_from_teacher:
+             ratio = inputs["importance_sampling_ratio"]
+             importance_weights = (ratio * loss_completion_mask).sum(-1) / loss_completion_mask.sum(-1).clamp(min=1.0)
