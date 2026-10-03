@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fine-tune BERTimbau (encoder) for NER on the DODF/UnB-KnEDLe corpus.
+"""Fine-tune BERTimbau (encoder) for NER on the DODF/KnEDLe corpus.
 
 State-of-the-art baseline (token classification) to contrast with the generative
 NER of Qwen3-4B. Uses AutoModelForTokenClassification + Trainer over the SAME CoNLL
@@ -84,7 +84,7 @@ def _ensure_safetensors(hub_model_id: str) -> str:
 
 
 ROOT = Path(__file__).parent.parent
-CONLL_DIR = ROOT / "datasets/lre-dodfpcorpus-main/splits/conll"
+CONLL_DIR = ROOT / "datasets/dodfp-corpus/splits/conll"
 RESULTS_DIR = ROOT / "results"
 
 

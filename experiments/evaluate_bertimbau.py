@@ -42,8 +42,8 @@ from evaluate_ner import (
 from train_bertimbau import read_conll
 
 ROOT = Path(__file__).parent.parent
-CONLL_DIR = ROOT / "datasets/lre-dodfpcorpus-main/splits/conll"
-FT_DIR = ROOT / "datasets/lre-dodfpcorpus-main/splits/finetune"
+CONLL_DIR = ROOT / "datasets/dodfp-corpus/splits/conll"
+FT_DIR = ROOT / "datasets/dodfp-corpus/splits/finetune"
 RESULTS_DIR = ROOT / "results"
 
 

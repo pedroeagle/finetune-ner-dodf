@@ -120,7 +120,7 @@ case "$STEP" in
     train-sdft-full)        DEFAULT_HOURS=12 ;;  # SDFT EMA β=0 (control); ~8 jobs of 12h
     train-sdft-full-budget) DEFAULT_HOURS=12 ;;  # SDFT fixed teacher, budget matched to LoRA
     train-sdft-budget-seed) DEFAULT_HOURS=12 ;;  # extra seed of the budget run
-    train-sdft-anchor)      DEFAULT_HOURS=12 ;;  # KL anchor β (dissertation); env BETA + SEED
+    train-sdft-anchor)      DEFAULT_HOURS=12 ;;  # KL anchor β; env BETA + SEED
     eval-ner-sdft-full) DEFAULT_HOURS=12 ;;  # dev/test have ~18.7k examples
     bench-ft-sdft-full) DEFAULT_HOURS=4  ;;
     train-lora-frac)   DEFAULT_HOURS=12 ;;
@@ -204,7 +204,7 @@ case "$STEP" in
         JOB_NAME="eval-ner-dora"
         ;;
     train-sdft-full)
-        # SDFT EMA β=0 (dissertation CONTROL): 87k, 3 epochs, EMA teacher with no anchor.
+        # SDFT EMA β=0 (CONTROL): 87k, 3 epochs, EMA teacher with no anchor.
         # Collapses over the long horizon — the baseline the β anchor rescues.
         # grad-accum derived from the GPU count for an effective batch of 32 (mi250/8→1, mi210/4→2).
         # ~8 jobs of 12h chained (--dep afterany); auto-resume. Checkpoints under WORK.
@@ -229,7 +229,7 @@ case "$STEP" in
         JOB_NAME="train-sdft-budget-s${SEED}"
         ;;
     train-sdft-anchor)
-        # Dissertation experiment: EMA teacher + KL anchor to the base (β>0). Same config
+        # Additional experiment: EMA teacher + KL anchor to the base (β>0). Same config
         # as the train-sdft-full control; the only new variable is --beta. The β sweep
         # maps the H1×H2 trade-off. Env: BETA (required) + SEED (default 42).
         # Directory per β+seed; ~8 jobs of 12h chained (--dep afterany), auto-resume.

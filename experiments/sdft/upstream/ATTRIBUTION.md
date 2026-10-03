@@ -30,7 +30,7 @@ applies `beta_anchor.patch`. Both are git-ignored so they are never committed.
 ## Local modification (`beta_anchor.patch`)
 
 `distil_config.py` is used unchanged. `beta_anchor.patch` makes the **single**
-change to `distil_trainer.py` needed for the dissertation's KL-anchor experiment
+change to `distil_trainer.py` needed for the KL-anchor experiment
 (`--beta > 0` in `train_sdft.py`):
 
 1. Reference forward: when `self.anchor_to_base` is `True` (set by

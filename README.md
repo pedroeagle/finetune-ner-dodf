@@ -1,7 +1,7 @@
 # Generative NER on DODF acts — replication code
 
 Code for the experiments specializing a decoder LLM (**Qwen3-4B**) in **named
-entity recognition (NER)** over acts of the Diário Oficial do DF (the UnB-KnEDLe /
+entity recognition (NER)** over acts of the Diário Oficial do DF (the KnEDLe /
 DODF-P corpus), comparing fine-tuning strategies along two axes:
 
 - **H1 — task performance:** strict F1 (IOB2) on NER.
@@ -46,7 +46,7 @@ by the `bench-scripted` step that produces MathQA and CrowS-Pairs).
 
 - Python 3.10+, a GPU (the code was run on AMD ROCm MI250; `attn_implementation="eager"`
   and bf16 avoid NaNs on that platform).
-- The corpus at `datasets/lre-dodfpcorpus-main/corpus/*.conll` (not included; see the paper).
+- The corpus at `datasets/dodfp-corpus/corpus/*.conll` (not included; see the paper).
 - Dependencies: `pip install -r experiments/requirements.txt` (evaluation/SFT) and, in a
   separate venv, `pip install -r experiments/requirements-sdft.txt` (SDFT, trl 0.24).
 - **For SDFT**, the vendored trainer is not shipped here — fetch it first:
@@ -76,7 +76,7 @@ python experiments/evaluate_forgetting.py --compare \
     results/bench_base.json results/bench_lora_r8.json
 
 # 5. SDFT (see experiments/sdft/README.md for the method and the two collapse fixes)
-BETA=0.3 ./experiments/submit.sh train-sdft-anchor mi250        # KL anchor (dissertation)
+BETA=0.3 ./experiments/submit.sh train-sdft-anchor mi250        # KL anchor
 ./experiments/submit.sh train-sdft-full-budget mi250            # fixed teacher (paper)
 BASE=$WORK/checkpoints/sdft_r8_anchor_b03_s42 ./experiments/select_checkpoint.sh
 ```

@@ -57,7 +57,7 @@ from seqeval.scheme import IOB2
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 ROOT = Path(__file__).parent.parent
-FT_DIR = ROOT / "datasets/lre-dodfpcorpus-main/splits/finetune"
+FT_DIR = ROOT / "datasets/dodfp-corpus/splits/finetune"
 RESULTS_DIR = ROOT / "results"
 
 _UNIT_RE = re.compile(r"^(.+)\(([BI]-[\w]+|O)\)$")

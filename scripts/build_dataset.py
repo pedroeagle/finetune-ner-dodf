@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare the UnB-KnEDLe DODF corpus for the paper's experiment:
+"""Prepare the KnEDLe DODF corpus for the paper's experiment:
 
   1. Read the 11 .conll files (one per act type), in CoNLL/BIO format.
   2. Split 70/15/15 AT THE DOCUMENT LEVEL, stratified by act type.
@@ -30,11 +30,11 @@ RATIOS = (0.70, 0.15, 0.15)  # train, dev, test
 
 CORPUS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "datasets", "lre-dodfpcorpus-main", "corpus",
+    "datasets", "dodfp-corpus", "corpus",
 )
 OUT_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "datasets", "lre-dodfpcorpus-main", "splits",
+    "datasets", "dodfp-corpus", "splits",
 )
 CONLL_OUT = os.path.join(OUT_DIR, "conll")
 FT_OUT = os.path.join(OUT_DIR, "finetune")

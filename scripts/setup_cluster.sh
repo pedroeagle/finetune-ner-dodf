@@ -1,11 +1,11 @@
 #!/bin/bash
 
 ##########################################################################
-# Setup script for AMD HPC cluster environment
+# Setup script for ROCm GPU cluster environment
 # Run this once after SSH'ing into the cluster
 #
 # Usage (from the repo root):
-#   ssh USER@hpcfund.amd.com
+#   ssh <user>@<cluster-host>
 #   cd ~/finetune
 #   ./scripts/setup_cluster.sh
 #
@@ -18,7 +18,7 @@
 set -e
 
 echo "=========================================="
-echo "AMD HPC Cluster - Environment Setup"
+echo "ROCm GPU Cluster - Environment Setup"
 echo "=========================================="
 echo ""
 

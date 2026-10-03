@@ -32,7 +32,7 @@ reference to the base:
    target cannot degenerate and carries the task signal. This is the SDFT reported in the paper.
 2. **KL anchor β** (`--beta > 0`): keep the EMA teacher and **add** to the student's
    loss a term `β·KL(student‖base)`, pulling it toward the base's general behavior
-   (anti-drift). This is the dissertation experiment; the reference is always the
+   (anti-drift). This is the anchor experiment; the reference is always the
    frozen base (see `anchor_to_base` in `train_sdft.py` and `ATTRIBUTION.md`).
 
 ## Decisions (fidelity × comparability)
@@ -59,7 +59,7 @@ Full training (via SLURM):
 # fixed teacher, budget matched to LoRA (the paper's SDFT)
 ./experiments/submit.sh train-sdft-full-budget mi250
 
-# KL anchor β (dissertation); BETA required, SEED optional
+# KL anchor β; BETA required, SEED optional
 BETA=0.3 ./experiments/submit.sh train-sdft-anchor mi250
 ```
 

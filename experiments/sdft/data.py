@@ -22,7 +22,7 @@ from string import Template
 from datasets import Dataset
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-FT_DIR = ROOT / "datasets/lre-dodfpcorpus-main/splits/finetune"
+FT_DIR = ROOT / "datasets/dodfp-corpus/splits/finetune"
 
 # Mirrors the upstream Template (main.py::load_tooluse_dataset), in Brazilian Portuguese.
 TEACHER_TMPL = Template(

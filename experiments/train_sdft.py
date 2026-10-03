@@ -140,7 +140,7 @@ def main() -> None:
     parser.add_argument("--beta", type=float, default=0.0,
                         help="Weight of the KL anchor to the frozen BASE, added to the loss: "
                              "loss = KL(student||teacher) + beta*KL(student||base). 0 = plain SDFT. "
-                             ">0 (the dissertation experiment) tests whether the anchor stabilizes "
+                             ">0 (an additional experiment) tests whether the anchor stabilizes "
                              "the EMA teacher over the long horizon. The reference is always the base "
                              "(disable_adapter), never the EMA — see trainer.anchor_to_base below.")
     parser.add_argument("--wandb", action="store_true", help="Report to Weights & Biases")

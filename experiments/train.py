@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fine-tune Qwen3-4B on the DODF/UnB-KnEDLe corpus with LoRA or DoRA.
+"""Fine-tune Qwen3-4B on the DODF/KnEDLe corpus with LoRA or DoRA.
 
 Uses TRL SFTTrainer + PEFT LoraConfig. QLoRA (NF4) is enabled with --use-qlora.
 The adapter is saved in PEFT format (adapter_config.json + adapter_model.safetensors).
@@ -22,7 +22,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForLan
 from trl import SFTConfig, SFTTrainer
 
 ROOT = Path(__file__).parent.parent
-FT_DIR = ROOT / "datasets/lre-dodfpcorpus-main/splits/finetune"
+FT_DIR = ROOT / "datasets/dodfp-corpus/splits/finetune"
 RESULTS_DIR = ROOT / "results"
 
 CHATML_TMPL = (
