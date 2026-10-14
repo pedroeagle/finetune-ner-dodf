@@ -20,8 +20,18 @@ build/
 
 # Ambientes virtuais
 .venv/
+.venv-eval/
 venv/
 env/
+
+# API keys — never commit (used by experiments/evaluate_ner_api.py)
+.env
+*.key
+
+# Local run wrappers + logs: carry the real (non-anonymized) corpus path
+# and run logs — keep out of the anonymous submission.
+run_*.sh
+*.log
 
 # macOS
 .DS_Store
